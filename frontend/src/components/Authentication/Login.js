@@ -1,14 +1,14 @@
 import { Button } from "@chakra-ui/button";
 import { FormControl, FormLabel } from "@chakra-ui/form-control";
 import { Input, InputGroup, InputRightElement } from "@chakra-ui/input";
-import { VStack } from "@chakra-ui/layout";
+import { VStack, Text } from "@chakra-ui/layout";
 import { useState } from "react";
 import axios from "axios";
 import { useToast } from "@chakra-ui/react";
 import { useHistory } from "react-router-dom";
 import { ChatState } from "../../Context/ChatProvider";
 
-const Login = () => {
+const Login = ({ switchToSignup }) => {
   const [show, setShow] = useState(false);
   const handleClick = () => setShow(!show);
   const toast = useToast();
@@ -23,7 +23,7 @@ const Login = () => {
     setLoading(true);
     if (!email || !password) {
       toast({
-        title: "Please Fill all the Feilds",
+        title: "Please Fill all the Fields",
         status: "warning",
         duration: 5000,
         isClosable: true,
@@ -117,6 +117,13 @@ const Login = () => {
       >
         Get Guest User Credentials
       </Button>
+
+      <Text fontSize="sm" mt={2}>
+        Don't have an account?{" "}
+        <Button variant="link" colorScheme="blue" onClick={switchToSignup}>
+          Sign Up
+        </Button>
+      </Text>
     </VStack>
   );
 };
