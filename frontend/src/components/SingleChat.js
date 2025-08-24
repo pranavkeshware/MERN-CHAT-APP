@@ -35,6 +35,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
       preserveAspectRatio: "xMidYMid slice",
     },
   };
+
   const { selectedChat, setSelectedChat, user, notification, setNotification } =
     ChatState();
 
@@ -49,12 +50,22 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
       };
 
       setLoading(true);
-
       const { data } = await axios.get(
         `/api/message/${selectedChat._id}`,
         config
       );
-      setMessages(data);
+
+      // ✅ Sort messages by createdAt to ensure proper order
+      const sortedMessages = data.sort(
+        (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+      );
+
+      // ✅ Clear previous messages first, then set new ones
+      setMessages([]);
+      setTimeout(() => {
+        setMessages(sortedMessages);
+      }, 10);
+
       setLoading(false);
 
       socket.emit("join chat", selectedChat._id);
@@ -67,12 +78,17 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
         isClosable: true,
         position: "bottom",
       });
+      setLoading(false);
     }
   };
 
   const sendMessage = async (event) => {
-    if (event.key === "Enter" && newMessage) {
+    if (event.key === "Enter" && newMessage.trim()) {
       socket.emit("stop typing", selectedChat._id);
+
+      const contentToSend = newMessage.trim();
+      setNewMessage(""); // Clear input immediately
+
       try {
         const config = {
           headers: {
@@ -80,18 +96,42 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
             Authorization: `Bearer ${user.token}`,
           },
         };
-        setNewMessage("");
+
         const { data } = await axios.post(
           "/api/message",
           {
-            content: newMessage,
+            content: contentToSend,
             chatId: selectedChat,
           },
           config
         );
+
+        // ✅ Add message with proper structure
+        const newMessageData = {
+          ...data,
+          sender: {
+            ...data.sender,
+            _id: user._id,
+            name: user.name,
+            pic: user.pic,
+          },
+        };
+
+        // ✅ Optimistically update UI
+        setMessages((prev) => {
+          // Check for duplicates before adding
+          const isDuplicate = prev.some(
+            (msg) => msg._id === newMessageData._id
+          );
+          if (isDuplicate) return prev;
+          return [...prev, newMessageData];
+        });
+
+        // ✅ Emit to socket for other users
         socket.emit("new message", data);
-        setMessages([...messages, data]);
       } catch (error) {
+        // ✅ Restore message in input if send fails
+        setNewMessage(contentToSend);
         toast({
           title: "Error Occured!",
           description: "Failed to send the Message",
@@ -111,31 +151,51 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     socket.on("typing", () => setIsTyping(true));
     socket.on("stop typing", () => setIsTyping(false));
 
-    // eslint-disable-next-line
-  }, []);
+    return () => {
+      socket.disconnect();
+    };
+  }, [user]);
 
   useEffect(() => {
     fetchMessages();
-
     selectedChatCompare = selectedChat;
-    // eslint-disable-next-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChat]);
 
   useEffect(() => {
-    socket.on("message recieved", (newMessageRecieved) => {
+    const handleMessageReceived = (newMessageReceived) => {
       if (
-        !selectedChatCompare || // if chat is not selected or doesn't match current chat
-        selectedChatCompare._id !== newMessageRecieved.chat._id
+        !selectedChatCompare ||
+        selectedChatCompare._id !== newMessageReceived.chat._id
       ) {
-        if (!notification.includes(newMessageRecieved)) {
-          setNotification([newMessageRecieved, ...notification]);
+        // Different chat - add to notifications
+        if (!notification.some((n) => n._id === newMessageReceived._id)) {
+          setNotification([newMessageReceived, ...notification]);
           setFetchAgain(!fetchAgain);
         }
       } else {
-        setMessages([...messages, newMessageRecieved]);
+        // ✅ Same chat - add message if it's not from current user and not duplicate
+        if (newMessageReceived.sender._id !== user._id) {
+          setMessages((prev) => {
+            // Check for duplicates
+            const isDuplicate = prev.some(
+              (msg) => msg._id === newMessageReceived._id
+            );
+            if (isDuplicate) return prev;
+
+            // Add new message maintaining chronological order
+            const updatedMessages = [...prev, newMessageReceived];
+            return updatedMessages.sort(
+              (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+            );
+          });
+        }
       }
-    });
-  });
+    };
+
+    socket.on("message recieved", handleMessageReceived);
+    return () => socket.off("message recieved", handleMessageReceived);
+  }, [notification, fetchAgain, setFetchAgain, setNotification, user._id]);
 
   const typingHandler = (e) => {
     setNewMessage(e.target.value);
@@ -146,6 +206,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
       setTyping(true);
       socket.emit("typing", selectedChat._id);
     }
+
     let lastTypingTime = new Date().getTime();
     var timerLength = 3000;
     setTimeout(() => {
@@ -168,12 +229,12 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
             px={2}
             w="100%"
             fontFamily="Work sans"
-            d="flex"
+            display="flex"
             justifyContent={{ base: "space-between" }}
             alignItems="center"
           >
             <IconButton
-              d={{ base: "flex", md: "none" }}
+              display={{ base: "flex", md: "none" }}
               icon={<ArrowBackIcon />}
               onClick={() => setSelectedChat("")}
             />
@@ -197,7 +258,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
               ))}
           </Text>
           <Box
-            d="flex"
+            display="flex"
             flexDir="column"
             justifyContent="flex-end"
             p={3}
@@ -216,7 +277,10 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
                 margin="auto"
               />
             ) : (
-              <div className="messages">
+              <div
+                className="messages"
+                style={{ height: "100%", overflow: "hidden" }}
+              >
                 <ScrollableChat messages={messages} />
               </div>
             )}
@@ -231,27 +295,29 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
                 <div>
                   <Lottie
                     options={defaultOptions}
-                    // height={50}
                     width={70}
                     style={{ marginBottom: 15, marginLeft: 0 }}
                   />
                 </div>
-              ) : (
-                <></>
-              )}
+              ) : null}
               <Input
                 variant="filled"
                 bg="#E0E0E0"
                 placeholder="Enter a message.."
                 value={newMessage}
                 onChange={typingHandler}
+                autoComplete="off"
               />
             </FormControl>
           </Box>
         </>
       ) : (
-        // to get socket.io on same page
-        <Box d="flex" alignItems="center" justifyContent="center" h="100%">
+        <Box
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          h="100%"
+        >
           <Text fontSize="3xl" pb={3} fontFamily="Work sans">
             Click on a user to start chatting
           </Text>
